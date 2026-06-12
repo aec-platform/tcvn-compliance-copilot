@@ -6,7 +6,8 @@ This document covers the three supported deployment modes.
 
 ```bash
 cp .env.example .env
-# edit .env: set ANTHROPIC_API_KEY at minimum
+# review .env: LLM defaults to the bundled Ollama service (no API key needed).
+# For GPU production, point LLM_BASE_URL at a vLLM/SGLang gateway instead.
 make bootstrap   # build + migrate + seed corpus manifests
 make up
 make logs

@@ -20,7 +20,8 @@ Two-pass compliance engine:
    threshold. Output is a `RuleResult` with `clause_id`, `severity`, `confidence`,
    and reproducible `values`.
 2. **LLM pass** — for each design-concern bucket, RAG retrieves the most
-   relevant clauses (minus those the rules already covered) and asks Claude
+   relevant clauses (minus those the rules already covered) and asks the
+   self-hosted OSS LLM (Qwen 2.5 by default, OpenAI-compatible endpoint)
    to judge. Output is parsed into the same `Finding` schema.
 
 ## Consequences

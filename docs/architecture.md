@@ -56,12 +56,18 @@ assumes you've read the top-level [README](../README.md).
 - Uploaded drawings (private).
 - Rendered reports (private; access via short-lived presigned URLs).
 
-### Anthropic Claude
+### Self-hosted OSS LLM (OpenAI-compatible)
 
-- `claude-opus-4-7` for compliance reasoning.
-- `claude-haiku-4-5-20251001` for drawing extraction.
-- Prompt caching enabled on the system prompt so the standards corpus and
-  instructions are billed at the cached rate after the first call.
+- Default reasoning model: `qwen2.5:32b-instruct` (Apache-2.0, strong VN + JSON).
+- Default extraction model: `qwen2.5:7b-instruct` (fast triage, structured output).
+- Served via Ollama (dev/CPU) or vLLM / SGLang (production GPU). Both speak
+  OpenAI-compatible `/chat/completions` — swap via `LLM_BASE_URL`, no code change.
+- Prefix / KV-cache reuse is implicit: the standards-corpus system prompt is
+  identical across calls, so the inference server pays the prefill cost ~once
+  per server restart. vLLM/SGLang report cache hits in
+  `usage.prompt_tokens_details.cached_tokens`.
+- **Data sovereignty**: design files never leave operator infrastructure — the
+  project mandates OSS, self-hostable models only.
 
 ## Request: kicking off a compliance review
 
@@ -73,7 +79,7 @@ assumes you've read the top-level [README](../README.md).
 6. Worker:
    - Merges `extracted.summary` across all the project's ready drawings.
    - Runs `RULES` (deterministic) — produces high-confidence findings.
-   - For each design-concern bucket: hybrid retrieve clauses → ask Claude to judge.
+   - For each design-concern bucket: hybrid retrieve clauses → ask the OSS LLM to judge.
    - Persists findings; renders PDF+JSON; uploads to object storage.
 7. User polls `GET /compliance/runs/{id}` until `status=succeeded`.
 8. User fetches `GET /compliance/runs/{id}/report` → 307 to a presigned URL.

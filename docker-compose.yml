@@ -14,10 +14,11 @@ x-api-env: &api-env
   S3_SECRET_KEY: ${S3_SECRET_KEY}
   S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS}
   S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS}
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-  CLAUDE_REASONING_MODEL: ${CLAUDE_REASONING_MODEL}
-  CLAUDE_EXTRACTION_MODEL: ${CLAUDE_EXTRACTION_MODEL}
-  CLAUDE_PROMPT_CACHE_ENABLED: ${CLAUDE_PROMPT_CACHE_ENABLED}
+  LLM_BASE_URL: ${LLM_BASE_URL}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_REASONING_MODEL: ${LLM_REASONING_MODEL}
+  LLM_EXTRACTION_MODEL: ${LLM_EXTRACTION_MODEL}
+  LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-8192}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL}
   EMBEDDING_DIM: ${EMBEDDING_DIM}
   API_SECRET_KEY: ${API_SECRET_KEY}
@@ -91,6 +92,35 @@ services:
       exit 0;
       "
 
+  # OSS LLM gateway. Dev/CPU default = Ollama. For GPU production replace this
+  # block with vLLM (or SGLang) serving the same /chat/completions API and
+  # leave the rest of the stack untouched — clients only need LLM_BASE_URL.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # Tiny tier by default; production GPU should also pull qwen2.5:32b.
+      - "ollama pull qwen2.5:7b-instruct"
+    restart: "no"
+
   api:
     build:
       context: ./apps/api
@@ -113,6 +143,8 @@ services:
       redis:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     command: ["uvicorn", "tcvn_copilot.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     healthcheck:
@@ -163,3 +195,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  ollama_data:

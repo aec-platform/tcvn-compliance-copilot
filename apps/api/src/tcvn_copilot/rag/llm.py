@@ -1,17 +1,22 @@
-"""Thin async wrapper around the Anthropic Claude API.
+"""Thin async wrapper around an OpenAI-compatible OSS LLM endpoint.
 
-Centralises prompt caching, retries, and response parsing so call sites in the
-compliance engine stay declarative.
+Works with Ollama (http://localhost:11434/v1), vLLM, SGLang, llama.cpp server,
+LiteLLM, or LM Studio — anything that speaks `/chat/completions`. Centralises
+retries and JSON parsing so call sites in the compliance engine stay declarative.
+
+The LLM must stay on infrastructure under the operator's control: TCVN/QCVN
+review touches client design files that are commercially sensitive, and the
+project mandates self-hosted OSS models (Qwen / Llama / DeepSeek) rather than
+cross-border managed APIs.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 
-from anthropic import AsyncAnthropic
-from anthropic.types import MessageParam
+import httpx
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -28,6 +33,11 @@ log = get_logger(__name__)
 ModelRole = Literal["reasoning", "extraction"]
 
 
+class Message(TypedDict):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
 @dataclass(slots=True)
 class LLMResponse:
     text: str
@@ -38,86 +48,107 @@ class LLMResponse:
     model: str
 
 
-_client: AsyncAnthropic | None = None
+_client: httpx.AsyncClient | None = None
 
 
-def _get_client() -> AsyncAnthropic:
+def _get_client() -> httpx.AsyncClient:
     global _client  # noqa: PLW0603
     if _client is None:
         settings = get_settings()
-        _client = AsyncAnthropic(
-            api_key=settings.anthropic_api_key.get_secret_value(),
-            timeout=settings.claude_request_timeout_seconds,
+        headers: dict[str, str] = {}
+        if settings.llm_api_key is not None:
+            secret = settings.llm_api_key.get_secret_value()
+            if secret:
+                headers["authorization"] = f"Bearer {secret}"
+        _client = httpx.AsyncClient(
+            base_url=str(settings.llm_base_url).rstrip("/"),
+            headers=headers,
+            timeout=httpx.Timeout(settings.llm_request_timeout_seconds),
         )
     return _client
 
 
 def _model_for(role: ModelRole) -> str:
     s = get_settings()
-    return s.claude_reasoning_model if role == "reasoning" else s.claude_extraction_model
+    return s.llm_reasoning_model if role == "reasoning" else s.llm_extraction_model
 
 
 @retry(
     reraise=True,
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((TimeoutError, ConnectionError)),
+    retry=retry_if_exception_type(
+        (TimeoutError, ConnectionError, httpx.TransportError, httpx.HTTPStatusError)
+    ),
 )
 async def complete(
     *,
-    system: str | list[dict[str, Any]],
-    messages: list[MessageParam],
+    system: str,
+    messages: list[Message],
     role: ModelRole = "reasoning",
     max_tokens: int | None = None,
     temperature: float = 0.0,
-    cacheable_system: bool = True,
+    json_response: bool = False,
 ) -> LLMResponse:
-    """Run a single Claude completion.
+    """Run a single OSS LLM completion via OpenAI-compatible /chat/completions.
 
-    `cacheable_system` marks the system prompt as a cache control point so the
-    standards corpus and instructions are billed at the cached rate after the
-    first call.
+    The system prompt is repeated verbatim across calls so the inference server
+    (vLLM/SGLang with prefix caching, Ollama with KV-cache reuse) can serve
+    the standards corpus prefix from cache — same effect as Anthropic's
+    `cache_control: ephemeral`, no client-side wiring needed.
     """
     settings = get_settings()
     model = _model_for(role)
 
-    sys_block: list[dict[str, Any]]
-    if isinstance(system, str):
-        sys_block = [{"type": "text", "text": system}]
-    else:
-        sys_block = list(system)
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, *messages],
+        "max_tokens": max_tokens or settings.llm_max_output_tokens,
+        "temperature": temperature,
+    }
+    if json_response:
+        body["response_format"] = {"type": "json_object"}
 
-    if cacheable_system and settings.claude_prompt_cache_enabled and sys_block:
-        sys_block[-1] = {**sys_block[-1], "cache_control": {"type": "ephemeral"}}
-
+    client = _get_client()
     try:
-        resp = await _get_client().messages.create(
+        resp = await client.post("/chat/completions", json=body)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        log.warning(
+            "llm_call_failed",
+            status=exc.response.status_code,
+            body=exc.response.text[:500],
             model=model,
-            system=cast(Any, sys_block),
-            messages=messages,
-            max_tokens=max_tokens or settings.claude_max_output_tokens,
-            temperature=temperature,
         )
+        raise ExternalServiceError(
+            f"LLM endpoint returned {exc.response.status_code}: {exc.response.text[:200]}"
+        ) from exc
     except Exception as exc:
-        log.warning("anthropic_call_failed", error=str(exc), model=model)
-        raise ExternalServiceError(f"Claude API call failed: {exc}") from exc
+        log.warning("llm_call_failed", error=str(exc), model=model)
+        raise ExternalServiceError(f"LLM call failed: {exc}") from exc
 
-    text_parts = [block.text for block in resp.content if block.type == "text"]
-    usage = resp.usage
+    data = cast(dict[str, Any], resp.json())
+    choice = (data.get("choices") or [{}])[0]
+    text = (choice.get("message") or {}).get("content") or ""
+    usage = data.get("usage") or {}
+    prompt_details = usage.get("prompt_tokens_details") or {}
+
     return LLMResponse(
-        text="".join(text_parts),
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
-        cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        text=text,
+        input_tokens=int(usage.get("prompt_tokens") or 0),
+        output_tokens=int(usage.get("completion_tokens") or 0),
+        # vLLM / SGLang report prefix-cache hits here; Ollama leaves it zero
+        # because its KV-cache reuse is implicit.
+        cache_read_tokens=int(prompt_details.get("cached_tokens") or 0),
+        cache_creation_tokens=0,
         model=model,
     )
 
 
 async def complete_json(
     *,
-    system: str | list[dict[str, Any]],
-    messages: list[MessageParam],
+    system: str,
+    messages: list[Message],
     role: ModelRole = "reasoning",
     max_tokens: int | None = None,
 ) -> dict[str, Any]:
@@ -128,9 +159,9 @@ async def complete_json(
         role=role,
         max_tokens=max_tokens,
         temperature=0.0,
+        json_response=True,
     )
     body = resp.text.strip()
-    # Strip ```json fences if the model added them despite instructions.
     if body.startswith("```"):
         body = body.strip("`")
         body = body.split("\n", 1)[1] if "\n" in body else body

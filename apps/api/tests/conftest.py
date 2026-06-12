@@ -21,7 +21,9 @@ os.environ.setdefault("CELERY_BROKER_URL", "redis://localhost:6379/15")
 os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/15")
 os.environ.setdefault("S3_ACCESS_KEY", "test")
 os.environ.setdefault("S3_SECRET_KEY", "test")
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
+os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
+os.environ.setdefault("LLM_REASONING_MODEL", "qwen2.5:7b-instruct")
+os.environ.setdefault("LLM_EXTRACTION_MODEL", "qwen2.5:7b-instruct")
 os.environ.setdefault("API_SECRET_KEY", "test-secret-key-with-enough-entropy")
 
 import pytest_asyncio

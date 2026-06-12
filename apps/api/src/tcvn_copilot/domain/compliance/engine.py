@@ -5,7 +5,8 @@ Two layers:
      Fast, cheap, auditable; cover the high-confidence quantitative cases
      (e.g. corridor width >= 1.4 m, ramp slope <= 1/12).
   2. **LLM-judged checks** — for clauses the rules can't decide, we retrieve
-     the relevant clauses and ask Claude to judge with full citations.
+     the relevant clauses and ask a self-hosted OSS LLM (Qwen 2.5 by default,
+     served via Ollama/vLLM) to judge with full citations.
 
 Both produce `Finding` records that get persisted by the worker.
 """

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, cast
 
 from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -69,13 +69,17 @@ class Settings(BaseSettings):
     s3_bucket_uploads: str = "tcvn-uploads"
     s3_bucket_reports: str = "tcvn-reports"
 
-    # ---- Anthropic / Claude ---------------------------------------------
-    anthropic_api_key: SecretStr
-    claude_reasoning_model: str = "claude-opus-4-7"
-    claude_extraction_model: str = "claude-haiku-4-5-20251001"
-    claude_max_output_tokens: int = 8192
-    claude_prompt_cache_enabled: bool = True
-    claude_request_timeout_seconds: float = 120.0
+    # ---- LLM (OSS, OpenAI-compatible) -----------------------------------
+    # Defaults: Ollama on localhost serving Qwen 2.5. For production swap to
+    # vLLM / SGLang on a GPU node and point `llm_base_url` at the gateway.
+    llm_base_url: AnyHttpUrl = cast(AnyHttpUrl, "http://localhost:11434/v1")
+    llm_api_key: SecretStr | None = None
+    # 7b is the CPU/laptop dev default; production GPU should override to
+    # qwen2.5:32b-instruct via the LLM_REASONING_MODEL env var.
+    llm_reasoning_model: str = "qwen2.5:7b-instruct"
+    llm_extraction_model: str = "qwen2.5:7b-instruct"
+    llm_max_output_tokens: int = 8192
+    llm_request_timeout_seconds: float = 120.0
 
     # ---- RAG -------------------------------------------------------------
     embedding_model: str = "BAAI/bge-m3"

@@ -53,7 +53,7 @@ SYSTEM_PROMPT_VI = dedent(
 
 
 def build_user_message(*, design_data: dict[str, Any], clauses: list[dict[str, Any]]) -> str:
-    """Compose the user-turn payload as XML-tagged blocks Claude handles well."""
+    """Compose the user-turn payload as XML-tagged blocks; Qwen 2.5 and Llama 3 both follow this structure reliably."""
     design_json = json.dumps(design_data, ensure_ascii=False, indent=2)
     clauses_json = json.dumps(clauses, ensure_ascii=False, indent=2)
     return dedent(
