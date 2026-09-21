@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:20-bookworm-slim AS base
+FROM node:25-bookworm-slim AS base
 RUN corepack enable && corepack prepare pnpm@9.12.2 --activate
 WORKDIR /app
 
@@ -24,7 +24,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
 # ---- prod (standalone runtime) ---------------------------------------
-FROM node:20-bookworm-slim AS prod
+FROM node:25-bookworm-slim AS prod
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN groupadd --system --gid 1001 nextjs \
